@@ -16,14 +16,6 @@ DOMAIN_CHECK_VALIDITY="yes"
 
 #### First initialize some static variables ####
 
-# Specify path to database management tool
-if [ $DB_GUI -eq 1 ]; then
-    DB_GUI_PATH="/usr/local/share/phpmyadmin/"
-else
-    DB_GUI_PATH="/usr/local/share/adminer/"
-fi
-
-
 # Logrotate Postrotate for Nginx
 # From options.conf, nginx = 1, apache = 2
 if [ $WEBSERVER -eq 1 ]; then
@@ -55,13 +47,6 @@ function initialize_variables {
         DOMAIN_ENABLED_PATH="/etc/apache2/sites-enabled/$DOMAIN"
     fi
 
-    # Awstats command to be placed in logrotate file
-    if [ $AWSTATS_ENABLE = 'yes' ]; then
-        AWSTATS_CMD="/usr/share/awstats/tools/awstats_buildstaticpages.pl -update -config=$DOMAIN -dir=$DOMAIN_PATH/awstats -awstatsprog=/usr/lib/cgi-bin/awstats.pl > /dev/null"
-    else
-        AWSTATS_CMD=""
-    fi
-
     # Name of the logrotate file
     LOGROTATE_FILE="domain-$DOMAIN"
 
@@ -78,33 +63,6 @@ function reload_webserver {
     fi
 
 } # End function reload_webserver
-
-
-function php_fpm_add_user {
-
-    # Copy over FPM template for this Linux user if it doesn't exist
-    if [ ! -e /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf ]; then
-        cp /etc/php5/fpm/pool.d/{www.conf,$DOMAIN_OWNER.conf}
-
-        # Change pool user, group and socket to the domain owner
-        sed -i 's/^\[www\]$/\['${DOMAIN_OWNER}'\]/' /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf
-        sed -i 's/^listen =.*/listen = \/var\/run\/php5-fpm-'${DOMAIN_OWNER}'.sock/' /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf
-        sed -i 's/^user = www-data$/user = '${DOMAIN_OWNER}'/' /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf
-        sed -i 's/^group = www-data$/group = '${DOMAIN_OWNER}'/' /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf
-        sed -i 's/^;listen.mode =.*/listen.mode = 0660/' /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf
-
-       if [ $USE_NGINX_ORG_REPO = "yes" ]; then
-            sed -i 's/^;listen.owner =.*/listen.owner = nginx/' /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf
-            sed -i 's/^;listen.group =.*/listen.group = nginx/' /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf
-        else
-            sed -i 's/^;listen.owner =.*/listen.owner = www-data/' /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf
-            sed -i 's/^;listen.group =.*/listen.group = www-data/' /etc/php5/fpm/pool.d/$DOMAIN_OWNER.conf
-        fi
-    fi
-
-    service php5-fpm restart
-
-} # End function php_fpm_add_user
 
 
 function add_domain {
@@ -126,16 +84,6 @@ function add_domain {
 </html>
 EOF
 
-    # Setup awstats directories
-    if [ $AWSTATS_ENABLE = 'yes' ]; then
-        mkdir -p $DOMAIN_PATH/{awstats,awstats/.data}
-        cd $DOMAIN_PATH/awstats/
-        # Create a symbolic link to awstats generated report named index.html
-        ln -s awstats.$DOMAIN.html index.html
-        # Create link to the icons folder so that reports icons can be loaded
-        ln -s /usr/share/awstats/icon awstats-icon
-        cd - &> /dev/null
-    fi
 
     # Set permissions
     chown $DOMAIN_OWNER:$DOMAIN_OWNER $DOMAINS_FOLDER
@@ -366,13 +314,6 @@ function remove_domain {
     rm -rf $DOMAIN_ENABLED_PATH
     reload_webserver
 
-    # Then delete all files and config files
-    if [ $AWSTATS_ENABLE = 'yes' ]; then
-        echo -e "* Removing awstats config: \033[1m/etc/awstats/awstats.$DOMAIN.conf\033[0m"
-        sleep 1
-        rm -rf /etc/awstats/awstats.$DOMAIN.conf
-    fi
-
     echo -e "* Removing domain files: \033[1m$DOMAIN_PATH\033[0m"
     sleep 1
     rm -rf $DOMAIN_PATH
@@ -425,74 +366,7 @@ function check_domain_valid {
 } # End function check_domain_valid
 
 
-function awstats_on {
 
-    # Search virtualhost directory to look for "stats". In case the user created a stats folder, we do not want to overwrite it.
-    stats_folder=`find $PUBLIC_HTML_PATH -maxdepth 1 -name "stats" -print0 | xargs -0 -I path echo path | wc -l`
-
-    # If no stats folder found, find all available public_html folders and create symbolic link to the awstats folder
-    if [ $stats_folder -eq 0 ]; then
-        find $VHOST_PATH -maxdepth 1 -name "public_html" -type d | xargs -L1 -I path ln -sv ../awstats path/stats
-        echo -e "\033[35;1mAwstats enabled.\033[0m"
-    else
-        echo -e "\033[35;1mERROR: Failed to enable AWStats for all domains. \033[0m"
-        echo -e "\033[35;1mERROR: AWStats is already enabled for at least 1 domain. \033[0m"
-        echo -e "\033[35;1mERROR: Turn AWStats off again before re-enabling. \033[0m"
-        echo -e "\033[35;1mERROR: Also ensure that all your public_html(s) do not have a manually created \"stats\" folder. \033[0m"
-    fi
-
-} # End function awstats_on
-
-
-function awstats_off {
-
-    # Search virtualhost directory to look for "stats" symbolic links
-    find $PUBLIC_HTML_PATH -maxdepth 1 -name "stats" -type l -print0 | xargs -0 -I path echo path > /tmp/awstats.txt
-
-    # Remove symbolic links
-    while read LINE; do
-        rm -rfv $LINE
-    done < "/tmp/awstats.txt"
-    rm -rf /tmp/awstats.txt
-
-    echo -e "\033[35;1mAwstats disabled. If you do not see any \"removed\" messages, it means it has already been disabled.\033[0m"
-
-} # End function awstats_off
-
-
-function dbgui_on {
-
-    # Search virtualhost directory to look for "dbgui". In case the user created a "dbgui" folder, we do not want to overwrite it.
-    dbgui_folder=`find $PUBLIC_HTML_PATH -maxdepth 1 -name "dbgui" -print0 | xargs -0 -I path echo path | wc -l`
-
-    # If no "dbgui" folders found, find all available public_html folders and create "dbgui" symbolic link to /usr/local/share/adminer|phpmyadmin
-    if [ $dbgui_folder -eq 0 ]; then
-        find $VHOST_PATH -maxdepth 1 -name "public_html" -type d | xargs -L1 -I path ln -sv $DB_GUI_PATH path/dbgui
-        echo -e "\033[35;1mAdminer or phpMyAdmin enabled.\033[0m"
-    else
-        echo -e "\033[35;1mERROR: Failed to enable Adminer or phpMyAdmin for all domains. \033[0m"
-        echo -e "\033[35;1mERROR: It is already enabled for at least 1 domain. \033[0m"
-        echo -e "\033[35;1mERROR: Turn it off again before re-enabling. \033[0m"
-        echo -e "\033[35;1mERROR: Also ensure that all your public_html(s) do not have a manually created \"dbgui\" folder. \033[0m"
-    fi
-
-} # End function dbgui_on
-
-
-function dbgui_off {
-
-    # Search virtualhost directory to look for "dbgui" symbolic links
-    find $PUBLIC_HTML_PATH -maxdepth 1 -name "dbgui" -type l -print0 | xargs -0 -I path echo path > /tmp/dbgui.txt
-
-    # Remove symbolic links
-    while read LINE; do
-        rm -rfv $LINE
-    done < "/tmp/dbgui.txt"
-    rm -rf /tmp/dbgui.txt
-
-    echo -e "\033[35;1mAdminer or phpMyAdmin disabled. If \"removed\" messages do not appear, it has been previously disabled.\033[0m"
-
-} # End function dbgui_off
 
 
 #### Main program begins ####
@@ -559,7 +433,6 @@ add)
     fi
 
     add_domain
-    php_fpm_add_user
     reload_webserver
     echo -e "\033[35;1mSuccesfully added \"${DOMAIN}\" to user \"${DOMAIN_OWNER}\" \033[0m"
     echo -e "\033[35;1mYou can now upload your site to $DOMAIN_PATH/public_html.\033[0m"
