@@ -107,20 +107,6 @@ EOF
 
     ## Third party mirrors ##
 
-    # Need to add Dotdeb repo for installing PHP5-FPM when using Debian 6.0 (squeeze)
-    if  [ $DISTRO = "Debian" ] && [ $RELEASE = "squeeze" ]; then
-        echo -e "\033[35;1mEnabling DotDeb repo for Debian 6.0 Squeeze. \033[0m"
-        cat > /etc/apt/sources.list.d/dotdeb.list <<EOF
-# Dotdeb
-deb http://packages.dotdeb.org squeeze all
-deb-src http://packages.dotdeb.org squeeze all
-
-EOF
-        wget http://www.dotdeb.org/dotdeb.gpg
-        cat dotdeb.gpg | apt-key add -
-    fi # End if DISTRO = Debian && RELEASE = squeeze
-
-
     # If user wants to install nginx from official repo and webserver=nginx
     if  [ $USE_NGINX_ORG_REPO = "yes" ] && [ $WEBSERVER = 1 ]; then
         echo -e "\033[35;1mEnabling nginx.org repo for Debian $RELEASE. \033[0m"
@@ -143,57 +129,6 @@ EOF
         wget http://nginx.org/packages/keys/nginx_signing.key
         cat nginx_signing.key | apt-key add -
     fi # End if USE_NGINX_ORG_REPO = yes && WEBSERVER = 1
-
-
-    # If user wants to install MariaDB instead of MySQL
-    if [ $DBSERVER = 2 ]; then
-        echo -e "\033[35;1mEnabling MariaDB.org repo for $DISTRO $RELEASE. \033[0m"
-        cat > /etc/apt/sources.list.d/MariaDB.list <<EOF
-# http://mariadb.org/mariadb/repositories/
-deb $MARIADB_REPO`echo $DISTRO | tr [:upper:] [:lower:]` $RELEASE main
-deb-src $MARIADB_REPO`echo $DISTRO | tr [:upper:] [:lower:]` $RELEASE main
-
-EOF
-
-        # Set APT pinning for MariaDB packages
-        cat > /etc/apt/preferences.d/MariaDB <<EOF
-# Prevent potential conflict with main repo that causes
-# MariaDB to be uninstalled when upgrading mysql-common
-Package: *
-Pin: origin $MARIADB_REPO_HOSTNAME
-Pin-Priority: 1000
-
-EOF
-
-        # Import MariaDB signing key
-        apt-key adv --recv-keys --keyserver keyserver.ubuntu.com 0xcbcb082a1bb943db
-    fi # End if user wants to install MariaDB
-
-    # If user wants to install Percona instead of MySQL
-    if [ $DBSERVER = 3 ]; then
-        echo -e "\033[35;1mEnabling Percona.com repo for $DISTRO $RELEASE. \033[0m"
-        cat > /etc/apt/sources.list.d/Percona.list <<EOF
-# Percona 5.6 repository list
-# http://www.percona.com/doc/percona-server/5.6/installation/apt_repo.html
-deb http://repo.percona.com/apt $RELEASE main
-deb-src http://repo.percona.com/apt $RELEASE main
-
-EOF
-
-        # Set APT pinning for Percona packages
-        cat > /etc/apt/preferences.d/Percona <<EOF
-# Prevent potential conflict with main repo that causes
-# Percona to be uninstalled when upgrading mysql-common
-Package: *
-Pin: release o=Percona Development Team
-Pin-Priority: 1001
-
-EOF
-
-        # Import Percona signing key
-        apt-key adv --keyserver keys.gnupg.net --recv-keys 1C4CBDCDCD2EFD2A
-    fi # End if user wants to install Percona
-
 
     apt-get update
     echo -e "\033[35;1m Successfully configured /etc/apt/sources.list \033[0m"
@@ -258,15 +193,6 @@ EOF
 } # End function install_webserver
 
 
-function install_php {
-
-    # Install PHP packages and extensions specified in options.conf
-    apt-get -y install $PHP_BASE
-    apt-get -y install $PHP_EXTRAS
-
-} # End function install_php
-
-
 function install_extras {
 
     if [ $AWSTATS_ENABLE = 'yes' ]; then
@@ -277,53 +203,6 @@ function install_extras {
     apt-get -y install $MISC_PACKAGES
 
 } # End function install_extras
-
-
-function install_mysql {
-
-    if [ $DBSERVER = 3 ]; then
-        echo "percona-server-server-5.6 percona-server-server/root_password password $MYSQL_ROOT_PASSWORD" | debconf-set-selections
-        echo "percona-server-server-5.6 percona-server-server/root_password_again password $MYSQL_ROOT_PASSWORD" | debconf-set-selections
-    else
-        echo "mysql-server mysql-server/root_password password $MYSQL_ROOT_PASSWORD" | debconf-set-selections
-        echo "mysql-server mysql-server/root_password_again password $MYSQL_ROOT_PASSWORD" | debconf-set-selections
-    fi
-
-    if [ $DBSERVER = 2 ]; then
-        apt-get -y install mariadb-server mariadb-client
-    elif [ $DBSERVER = 3 ]; then
-        apt-get -y install percona-server-server-5.6 percona-server-client-5.6
-    else
-        apt-get -y install mysql-server mysql-client
-    fi
-
-    echo -e "\033[35;1m Securing MySQL... \033[0m"
-    sleep 5
-
-    apt-get -y install expect
-
-    SECURE_MYSQL=$(expect -c "
-        set timeout 10
-        spawn mysql_secure_installation
-        expect \"Enter current password for root (enter for none):\"
-        send \"$MYSQL_ROOT_PASSWORD\r\"
-        expect \"Change the root password?\"
-        send \"n\r\"
-        expect \"Remove anonymous users?\"
-        send \"y\r\"
-        expect \"Disallow root login remotely?\"
-        send \"y\r\"
-        expect \"Remove test database and access to it?\"
-        send \"y\r\"
-        expect \"Reload privilege tables now?\"
-        send \"y\r\"
-        expect eof
-    ")
-
-    echo "$SECURE_MYSQL"
-    apt-get -y purge expect
-
-} # End function install_mysql
 
 
 function optimize_stack {
@@ -367,148 +246,11 @@ function optimize_stack {
         # Disable Awstats from executing every 10 minutes. Put a hash in front of any line.
         sed -i 's/^[^#]/#&/' /etc/cron.d/awstats
     fi
-
-    service php5-fpm stop
-    php_fpm_conf="/etc/php5/fpm/pool.d/www.conf"
-    # Limit FPM processes
-    sed -i 's/^pm.max_children.*/pm.max_children = '${FPM_MAX_CHILDREN}'/' $php_fpm_conf
-    sed -i 's/^pm.start_servers.*/pm.start_servers = '${FPM_START_SERVERS}'/' $php_fpm_conf
-    sed -i 's/^pm.min_spare_servers.*/pm.min_spare_servers = '${FPM_MIN_SPARE_SERVERS}'/' $php_fpm_conf
-    sed -i 's/^pm.max_spare_servers.*/pm.max_spare_servers = '${FPM_MAX_SPARE_SERVERS}'/' $php_fpm_conf
-    sed -i 's/\;pm.max_requests.*/pm.max_requests = '${FPM_MAX_REQUESTS}'/' $php_fpm_conf
-    # Change to socket connection for better performance
-    sed -i 's/^listen =.*/listen = \/var\/run\/php5-fpm-www-data.sock/' $php_fpm_conf
-
-    php_ini_dir="/etc/php5/fpm/php.ini"
-    # Tweak php.ini based on input in options.conf
-    sed -i 's/^max_execution_time.*/max_execution_time = '${PHP_MAX_EXECUTION_TIME}'/' $php_ini_dir
-    sed -i 's/^memory_limit.*/memory_limit = '${PHP_MEMORY_LIMIT}'/' $php_ini_dir
-    sed -i 's/^max_input_time.*/max_input_time = '${PHP_MAX_INPUT_TIME}'/' $php_ini_dir
-    sed -i 's/^post_max_size.*/post_max_size = '${PHP_POST_MAX_SIZE}'/' $php_ini_dir
-    sed -i 's/^upload_max_filesize.*/upload_max_filesize = '${PHP_UPLOAD_MAX_FILESIZE}'/' $php_ini_dir
-    sed -i 's/^expose_php.*/expose_php = Off/' $php_ini_dir
-    sed -i 's/^disable_functions.*/disable_functions = exec,system,passthru,shell_exec,escapeshellarg,escapeshellcmd,proc_close,proc_open,dl,popen,show_source/' $php_ini_dir
-
-    # Generating self signed SSL certs for securing phpMyAdmin, script logins etc
-    echo -e " "
-    echo -e "\033[35;1m Generating self signed SSL cert... \033[0m"
-    mkdir /etc/ssl/localcerts
-
-    apt-get -y install expect
-
-    GENERATE_CERT=$(expect -c "
-        set timeout 10
-        spawn openssl req -new -x509 -days 3650 -nodes -out /etc/ssl/localcerts/webserver.pem -keyout /etc/ssl/localcerts/webserver.key
-        expect \"Country Name (2 letter code) \[AU\]:\"
-        send \"\r\"
-        expect \"State or Province Name (full name) \[Some-State\]:\"
-        send \"\r\"
-        expect \"Locality Name (eg, city) \[\]:\"
-        send \"\r\"
-        expect \"Organization Name (eg, company) \[Internet Widgits Pty Ltd\]:\"
-        send \"\r\"
-        expect \"Organizational Unit Name (eg, section) \[\]:\"
-        send \"\r\"
-        expect \"Common Name (eg, YOUR name) \[\]:\"
-        send \"\r\"
-        expect \"Email Address \[\]:\"
-        send \"\r\"
-        expect eof
-    ")
-
-    echo "$GENERATE_CERT"
-    apt-get -y purge expect
-
-    # Tweak my.cnf. Commented out. Best to let users configure my.cnf on their own
-    #cp /etc/mysql/{my.cnf,my.cnf.bak}
-    #if [ -e /usr/share/doc/mysql-server-5.1/examples/my-medium.cnf.gz ]; then
-    #gunzip /usr/share/doc/mysql-server-5.1/examples/my-medium.cnf.gz
-    #cp /usr/share/doc/mysql-server-5.1/examples/my-medium.cnf /etc/mysql/my.cnf
-    #else
-    #gunzip /usr/share/doc/mysql-server-5.0/examples/my-medium.cnf.gz
-    #cp /usr/share/doc/mysql-server-5.0/examples/my-medium.cnf /etc/mysql/my.cnf
-    #fi
-    #sed -i '/myisam_sort_buffer_size/ a\skip-innodb' /etc/mysql/my.cnf
-    #sleep 1
-    #service mysql restart
-
+    
     restart_webserver
-    sleep 2
-    service php5-fpm start
-    sleep 2
-    service php5-fpm restart
     echo -e "\033[35;1m Optimize complete! \033[0m"
 
 } # End function optimize
-
-
-function install_postfix {
-
-    # Install postfix
-    echo "postfix postfix/main_mailer_type select Internet Site" | debconf-set-selections
-    echo "postfix postfix/mailname string $HOSTNAME_FQDN" | debconf-set-selections
-    echo "postfix postfix/destinations string localhost.localdomain, localhost" | debconf-set-selections
-    apt-get -y install postfix
-
-    # Allow mail delivery from localhost only
-    /usr/sbin/postconf -e "inet_interfaces = loopback-only"
-
-    sleep 1
-    postfix stop
-    sleep 1
-    postfix start
-
-} # End function install_postfix
-
-
-
-function install_dbgui {
-
-    # If user selected phpMyAdmin in options.conf
-    if [ $DB_GUI = 1  ]; then
-        mkdir /tmp/phpmyadmin
-        PMA_VER="`wget -q -O - https://www.phpmyadmin.net/downloads/|grep -m 1 '<h2>phpMyAdmin'|sed -r 's/^[^3-9]*([0-9.]*).*/\1/'`"
-        wget -O - "https://files.phpmyadmin.net/phpMyAdmin/${PMA_VER}/phpMyAdmin-${PMA_VER}-all-languages.tar.gz" | tar zxf - -C /tmp/phpmyadmin
-
-        # Check exit status to see if download is successful
-        if [ $? = 0  ]; then
-            mkdir /usr/local/share/phpmyadmin
-            rm -rf /usr/local/share/phpmyadmin/*
-            cp -Rpf /tmp/phpmyadmin/*/* /usr/local/share/phpmyadmin
-            cp /usr/local/share/phpmyadmin/{config.sample.inc.php,config.inc.php}
-            rm -rf /tmp/phpmyadmin
-
-            # Generate random blowfish string
-            LENGTH="20"
-            MATRIX="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-            while [ "${n:=1}" -le "$LENGTH" ]; do
-                BLOWFISH="$BLOWFISH${MATRIX:$(($RANDOM%${#MATRIX})):1}"
-                let n+=1
-            done
-
-            # Configure phpmyadmin blowfish variable
-            sed -i "s/blowfish_secret'] = ''/blowfish_secret'] = \'$BLOWFISH\'/"  /usr/local/share/phpmyadmin/config.inc.php
-            echo -e "\033[35;1mphpMyAdmin installed/upgraded.\033[0m"
-        else
-            echo -e "\033[35;1mInstall/upgrade failed. Perhaps phpMyAdmin download link is temporarily down. Update link in options.conf and try again.\033[0m"
-        fi
-
-    else # User selected Adminer
-
-        mkdir -p /usr/local/share/adminer
-        cd /usr/local/share/adminer
-        rm -rf /usr/local/share/adminer/*
-        wget http://www.adminer.org/latest.php
-        if [ $? = 0  ]; then
-            mv latest.php index.php
-            echo -e "\033[35;1m Adminer installed. \033[0m"
-        else
-            echo -e "\033[35;1mInstall/upgrade failed. Perhaps http://adminer.org is down. Try again later.\033[0m"
-        fi
-        cd - &> /dev/null
-    fi # End if DB_GUI
-
-} # End function install_dbgui
 
 
 function check_tmp_secured {
@@ -661,19 +403,11 @@ basic)
     ;;
 install)
     install_webserver
-    install_mysql
-    install_php
-    install_extras
-    install_postfix
     restart_webserver
-    service php5-fpm restart
     echo -e "\033[35;1m Webserver + PHP-FPM + MySQL install complete! \033[0m"
     ;;
 optimize)
     optimize_stack
-    ;;
-dbgui)
-    install_dbgui
     ;;
 tmpdd)
     check_tmp_secured
